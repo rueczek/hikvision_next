@@ -46,6 +46,7 @@ class EventInfo:
     is_proxy: bool = False  # True if the event comes from device connected via NVR
     disabled: bool = False
     notifications: list[str] = field(default_factory=list)
+    trigger_id: str | None = None  # ID in Event/triggers (e.g. VMD-1), used to set notification methods
 
 
 @dataclass
@@ -105,6 +106,7 @@ class CapabilitiesInfo:
     support_alarm_server: bool = False
     support_channel_zero: bool = False
     support_event_mutex_checking: bool = False
+    support_channel_status: bool = False  # NVR reports online status of connected IP cameras
     input_ports: int = 0
     output_ports: int = 0
 

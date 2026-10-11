@@ -54,6 +54,32 @@ def clean_int(value):
         # Extract digits from string (e.g. "I-1" -> "1")
         return int("".join(filter(str.isdigit, str(value))))
 
+
+def get_trigger_id(event_trigger: dict) -> str | None:
+    """Get ID of an Event/triggers entry (e.g. "VMD-1")."""
+    trigger_id = event_trigger.get("id")
+    if isinstance(trigger_id, list):
+        trigger_id = trigger_id[0] if trigger_id else None
+    if isinstance(trigger_id, dict):
+        trigger_id = trigger_id.get("#text")
+    return str(trigger_id) if trigger_id else None
+
+
+def get_event_triggers_list(event_triggers: dict) -> list[dict]:
+    """Get list of triggers from Event/triggers response."""
+    event_notification = event_triggers.get("EventNotification")
+    if event_notification:
+        return deep_get(event_notification, "EventTriggerList.EventTrigger", [])
+    return deep_get(event_triggers, "EventTriggerList.EventTrigger", [])
+
+
+def get_trigger_notifications(event_trigger: dict) -> list[dict]:
+    """Get notification methods nodes of an Event/triggers entry."""
+    notification_list = event_trigger.get("EventTriggerNotificationList") or {}
+    notifications = deep_get(notification_list, "EventTriggerNotification", [])
+    return [notify for notify in notifications if isinstance(notify, dict)]
+
+
 Node = dict[str, Any]
 
 _LOGGER = logging.getLogger(__name__)
@@ -135,6 +161,10 @@ class ISAPIClient:
         self.supported_events = await self.get_supported_events(capabilities)
 
         await self.get_protocols()
+
+        if self.device_info.is_nvr and self.capabilities.digital_cameras_inputs > 0:
+            with suppress(Exception):
+                self.capabilities.support_channel_status = bool(await self.get_cameras_online_status())
 
         with suppress(Exception):
             self.storage = await self.get_storage_devices()
@@ -339,17 +369,14 @@ class ISAPIClient:
                 url=url,
                 is_proxy=is_proxy,
                 notifications=[notify.get("notificationMethod") for notify in notifications] if notifications else [],
+                trigger_id=get_trigger_id(event_trigger),
             )
 
         events = []
 
         # Get events from Event/triggers
         event_triggers = await self.request(GET, "Event/triggers")
-        event_notification = event_triggers.get("EventNotification")
-        if event_notification:
-            available_events = deep_get(event_notification, "EventTriggerList.EventTrigger", [])
-        else:
-            available_events = deep_get(event_triggers, "EventTriggerList.EventTrigger", [])
+        available_events = get_event_triggers_list(event_triggers)
 
         # Build mapping of eventType → original ID prefix for URL construction
         # e.g., "vmd" → "VMD", "tamperdetection" → "tamper", "thermometry" → "thermometry"
@@ -640,6 +667,71 @@ class ISAPIClient:
             await self.request(PUT, event.url, present="xml", data=xml, use_forbidden_cache=False)
         else:
             raise ISAPISetEventStateMutexError(event, mutex_issues)
+
+    async def get_events_notifications(self) -> dict[str, list[str]]:
+        """Get notification methods of all event triggers (trigger id -> methods)."""
+        event_triggers = await self.request(GET, "Event/triggers")
+        result = {}
+        for event_trigger in get_event_triggers_list(event_triggers):
+            if not isinstance(event_trigger, dict):
+                continue
+            if trigger_id := get_trigger_id(event_trigger):
+                result[trigger_id] = [
+                    notify.get("notificationMethod") for notify in get_trigger_notifications(event_trigger)
+                ]
+        return result
+
+    async def set_event_notify_center(self, event: EventInfo, is_enabled: bool) -> None:
+        """Add or remove 'Notify Surveillance Center' action of the event trigger."""
+        if not event.trigger_id:
+            _LOGGER.warning("Cannot set notification method. Unknown trigger ID for event %s", event.id)
+            return
+
+        url = f"Event/triggers/{event.trigger_id}"
+        data = await self.request(GET, url, use_forbidden_cache=False)
+        event_trigger = data.get("EventTrigger")
+        if not isinstance(event_trigger, dict):
+            raise ValueError(f"Unexpected response for {url}")
+
+        notifications = get_trigger_notifications(event_trigger)
+        has_center = any(notify.get("notificationMethod") == "center" for notify in notifications)
+        if has_center == is_enabled:
+            return
+
+        if is_enabled:
+            notifications.append(
+                {"id": "center", "notificationMethod": "center", "notificationRecurrence": "beginning"}
+            )
+        else:
+            notifications = [notify for notify in notifications if notify.get("notificationMethod") != "center"]
+
+        notification_list = event_trigger.get("EventTriggerNotificationList") or {}
+        if notifications:
+            notification_list["EventTriggerNotification"] = notifications
+        else:
+            notification_list.pop("EventTriggerNotification", None)
+        event_trigger["EventTriggerNotificationList"] = notification_list
+
+        xml = xmltodict.unparse(data)
+        await self.request(PUT, url, present="xml", data=xml, use_forbidden_cache=False)
+
+        if is_enabled:
+            event.notifications = list(dict.fromkeys([*event.notifications, "center"]))
+        else:
+            event.notifications = [n for n in event.notifications if n != "center"]
+
+    async def get_cameras_online_status(self) -> dict[int, dict[str, Any]]:
+        """Get online status of IP cameras connected to NVR (camera id -> status)."""
+        data = await self.request(GET, "ContentMgmt/InputProxy/channels/status")
+        result = {}
+        for channel in deep_get(data, "InputProxyChannelStatusList.InputProxyChannelStatus", []):
+            if not isinstance(channel, dict) or channel.get("id") is None:
+                continue
+            result[clean_int(channel.get("id"))] = {
+                "online": str_to_bool(channel.get("online")),
+                "detect_result": channel.get("chanDetectResult"),
+            }
+        return result
 
     async def get_io_port_status(self, port_type: str, port_no: int) -> str:
         """Get status of physical ports."""

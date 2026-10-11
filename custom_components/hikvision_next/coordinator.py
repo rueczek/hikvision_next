@@ -10,12 +10,18 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import slugify
 
-from .const import CONF_ALARM_SERVER_HOST, DOMAIN, HOLIDAY_MODE
+from .const import CAMERAS_STATUS, CONF_ALARM_SERVER_HOST, DOMAIN, HOLIDAY_MODE
+from .isapi import EventInfo
 
 SCAN_INTERVAL_EVENTS = timedelta(seconds=120)
 SCAN_INTERVAL_HOLIDAYS = timedelta(minutes=60)
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def notify_switch_unique_id(event: EventInfo) -> str:
+    """Return unique id of 'Notify Surveillance Center' switch of the event."""
+    return ENTITY_ID_FORMAT.format(f"{event.unique_id}_notify_center")
 
 
 class EventsCoordinator(DataUpdateCoordinator):
@@ -64,6 +70,25 @@ class EventsCoordinator(DataUpdateCoordinator):
                 data[_id] = await self.device.get_io_port_status("output", i)
             except Exception as ex:  # pylint: disable=broad-except
                 self.device.handle_exception(ex, f"Cannot fetch state for alarm output {i}")
+
+        # Get 'Notify Surveillance Center' state of events (single request for all triggers)
+        events = [*self.device.events_info, *[e for camera in self.device.cameras for e in camera.events_info]]
+        events = [e for e in events if e.trigger_id]
+        if events:
+            try:
+                triggers_notifications = await self.device.get_events_notifications()
+                for event in events:
+                    if event.trigger_id in triggers_notifications:
+                        data[notify_switch_unique_id(event)] = "center" in triggers_notifications[event.trigger_id]
+            except Exception as ex:  # pylint: disable=broad-except
+                self.device.handle_exception(ex, "Cannot fetch events notification methods")
+
+        # Get online status of IP cameras connected to NVR
+        if self.device.capabilities.support_channel_status:
+            try:
+                data[CAMERAS_STATUS] = await self.device.get_cameras_online_status()
+            except Exception as ex:  # pylint: disable=broad-except
+                self.device.handle_exception(ex, "Cannot fetch cameras online status")
 
         # Refresh HDD data
         try:

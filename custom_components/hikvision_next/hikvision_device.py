@@ -8,7 +8,7 @@ import httpx
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.util import slugify
@@ -165,6 +165,7 @@ class HikvisionDevice(ISAPIClient):
                     is_proxy=event.is_proxy,
                     disabled=disabled,
                     notifications=notifications,
+                    trigger_id=event.trigger_id,
                 )
 
                 if existing := events_by_unique_id.get(unique_id):
@@ -174,11 +175,28 @@ class HikvisionDevice(ISAPIClient):
                     if not existing.url and event_info.url:
                         existing.url = event_info.url
                     existing.is_proxy = existing.is_proxy or event_info.is_proxy
+                    existing.trigger_id = existing.trigger_id or event_info.trigger_id
                     continue
 
                 events_by_unique_id[unique_id] = event_info
                 events.append(event_info)
         return events
+
+    def enable_event_entities(self, event: EventInfo) -> None:
+        """Enable event entities disabled by integration because of missing 'Notify Surveillance Center'.
+
+        Entity registry reloads the config entry after enabling, so the event state polling starts then.
+        """
+        entity_registry = er.async_get(self.hass)
+        for domain in ("binary_sensor", "switch"):
+            unique_id = f"{domain}.{event.unique_id}"
+            entity_id = entity_registry.async_get_entity_id(domain, DOMAIN, unique_id)
+            if not entity_id:
+                continue
+            entry = entity_registry.async_get(entity_id)
+            if entry and entry.disabled_by == er.RegistryEntryDisabler.INTEGRATION:
+                entity_registry.async_update_entity(entity_id, disabled_by=None)
+                _LOGGER.info("Enabled %s after turning on notifications for %s", entity_id, event.trigger_id)
 
     def handle_exception(self, ex: Exception, details: str = ""):
         """Handle common exceptions."""

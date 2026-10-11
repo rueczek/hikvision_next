@@ -60,6 +60,9 @@
       },
       "thermometry": {
         "name": "Thermometry"
+      },
+      "camera_online": {
+        "name": "Online"
       }
     },
     "switch": {
@@ -101,6 +104,39 @@
       },
       "thermometry": {
         "name": "Thermometry Detection"
+      },
+      "notify_motiondetection": {
+        "name": "Motion - notify HA"
+      },
+      "notify_tamperdetection": {
+        "name": "Video tampering - notify HA"
+      },
+      "notify_videoloss": {
+        "name": "Video loss - notify HA"
+      },
+      "notify_scenechangedetection": {
+        "name": "Scene change - notify HA"
+      },
+      "notify_fielddetection": {
+        "name": "Intrusion - notify HA"
+      },
+      "notify_linedetection": {
+        "name": "Line crossing - notify HA"
+      },
+      "notify_regionentrance": {
+        "name": "Region entrance - notify HA"
+      },
+      "notify_regionexiting": {
+        "name": "Region exiting - notify HA"
+      },
+      "notify_io": {
+        "name": "Alarm input {io_port_id} - notify HA"
+      },
+      "notify_pir": {
+        "name": "PIR - notify HA"
+      },
+      "notify_thermometry": {
+        "name": "Thermometry - notify HA"
       }
     },
     "camera": {
